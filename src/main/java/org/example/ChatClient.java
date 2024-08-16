@@ -7,156 +7,156 @@ import java.io.IOException;
 import java.io.PrintWriter;
 import java.net.Socket;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ThreadLocalRandom;
-import java.util.function.Consumer;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class ChatClient {
+    private static ObjectMapper objectMapper = new ObjectMapper();
 
-  private static ObjectMapper objectMapper = new ObjectMapper();
-
-  public static void main(String[] args) {
-//    String clientLogin = "User_" + UUID.randomUUID().toString();
-//    String clientLogin = "nagibator";
-    Scanner console = new Scanner(System.in);
-    System.out.println("Введите логин для подключения к чату");
-    String clientLogin = console.nextLine();
-
-    // 127.0.0.1 или localhost
-    try (Socket server = new Socket("localhost", 8888)) {
-      System.out.println("Успешно подключились к серверу");
-
-      try (PrintWriter out = new PrintWriter(server.getOutputStream(), true)) {
-        Scanner in = new Scanner(server.getInputStream());
-
-        String loginRequest = createLoginRequest(clientLogin);
-        out.println(loginRequest);
-
-        String loginResponseString = in.nextLine();
-        if (!checkLoginResponse(loginResponseString)) {
-          // TODO: Можно обогатить причиной, чтобы клиент получал эту причину
-          // (логин уже занят, ошибка аутентификации\авторизации, ...)
-          System.out.println("Не удалось подключиться к серверу");
-          return;
-        }
-
-        // client <----------------> server
-        // client getUsers ->        server
-        // client <- (getUsers|sendMessage from client) server    <--------sendMessage client2
-        //
-
-        // Отдельный поток на чтение сообщений
-//        ServerListener serverListener = new ServerListener(in);
-//        new Thread(serverListener).start();
-        new Thread(() -> {
-          while (true) {
-            // TODO: парсим сообщение в AbstractRequest
-            //  по полю type понимаем, что это за request, и обрабатываем его нужным образом
-            String msgFromServer = in.nextLine();
-            System.out.println("Сообщение от сервера: " + msgFromServer);
-          }
-        }).start();
-
-
+    public static void main(String[] args) {
+        Scanner console = new Scanner(System.in);
+        System.out.println("Введите хост для подключения к чату");
+        String hostServer = console.nextLine();
+        Integer parsePortServer = null;
+        AtomicBoolean flag = new AtomicBoolean(true);
         while (true) {
-          System.out.println("Что хочу сделать?");
-          System.out.println("1. Послать сообщение другу");
-          System.out.println("2. Послать сообщение всем");
-          System.out.println("3. Получить список логинов");
-
-          String type = console.nextLine();
-          if (type.equals("1")) {
-            // TODO: считываете с консоли логин, кому отправить
-
-            SendMessageRequest request = new SendMessageRequest();
-            request.setType("sendMessage");
-            System.out.println("Введите сообщение");
-            request.setMessage(console.nextLine());
-            System.out.println("Введите логин пользователя");
-            request.setRecipient(console.nextLine()); // TODO указываем логин получателя
-
-            String sendMsgRequest = objectMapper.writeValueAsString(request);
-            out.println(sendMsgRequest);
-          } else if (type.equals("2")) {
-            SendMessageRequest request = new SendMessageRequest();
-            request.setType("sendMessageAll");
-            System.out.println("Введите сообщение");
-            request.setMessage(console.nextLine());
-            request.setRecipient("all"); // TODO указываем логин получателя
-
-            String sendMsgRequest = objectMapper.writeValueAsString(request);
-            out.println(sendMsgRequest);
-          }
-
+            try {
+                System.out.println("Введите порт для подключения к чату");
+                String portServer = console.nextLine();
+                parsePortServer = Integer.parseInt(portServer);
+                break;
+            } catch (Exception e) {
+                System.out.println("Неверный формат порта");
+            }
         }
-      }
-    } catch (IOException e) {
-      System.err.println("Ошибка во время подключения к серверу: " + e.getMessage());
+
+        try (Socket server = new Socket(hostServer, parsePortServer)) {
+            System.out.println("Вы успешно подключились к серверу");
+            try (
+                    PrintWriter write = new PrintWriter(server.getOutputStream(), true);
+                    Scanner read = new Scanner(server.getInputStream())
+            ) {
+                System.out.println("Введите 1 для ввода логина и пароля, если Вы еще не зарегистрированы то введите 2");
+                String clientLogin = console.nextLine();
+                if(clientLogin.equals("2")){
+                    while (true){
+                        System.out.println("Введите логин для общения");
+                        String string = console.nextLine();
+                        String message = sendMessage("RegLogin", string, null);
+                        write.println(message);
+                        Message messageFromServer = messageToClass(read.nextLine());
+                        if (messageFromServer.getType().equals("OK")){
+                            break;
+                        } else {
+                            System.out.println(messageFromServer.getMessage());
+                        }
+                    }
+                    while (true){
+                        System.out.println("Введите пароль для входа");
+                        String string = console.nextLine();
+                        String message = sendMessage("RegPass", string, null);
+                        write.println(message);
+                        Message messageFromServer = messageToClass(read.nextLine());
+                        if (messageFromServer.getType().equals("OK")){
+                            break;
+                        } else {
+                            System.out.println(messageFromServer.getMessage());
+                        }
+                    }
+                }else {
+                    while (true){
+                        System.out.println("Введите логин и через пробел пароль для подключения к чату");
+                        clientLogin = console.nextLine();
+                        String message = sendMessage("Auth", clientLogin, null);
+                        write.println(message);
+                        Message message2 = messageToClass(read.nextLine());
+                        if (message2.getType().equals("Error")) {
+                            System.out.println(message2.getMessage());
+                        } else {
+                            break;
+                        }
+                    }
+                }
+
+                System.out.println("Вы успешно подключились к чату. Для отправки сообщения всем участникам просто введите сообщение. Для отправки личного сообщения введите @ и логин адресата без пробела, а затем пробел и само сообщение. Для выхода из приложения введите exit");
+
+                new Thread(() -> {
+                    while (flag.get()) {
+                        Message messageFromServer = messageToClass(read.nextLine());
+                        if(messageFromServer.getType().equals("Error")){
+                            System.out.println("Ошибка: " + messageFromServer.getMessage());
+                        }
+                        if(messageFromServer.getType().equals("OK")){
+                            System.out.println("Успех: " + messageFromServer.getMessage());
+                        }
+                        if(messageFromServer.getType().equals("Message")){
+                            System.out.println("!!! " + messageFromServer.getRecipient() + ": " + messageFromServer.getMessage());
+                        }
+                        if(messageFromServer.getType().equals("MessageAll")){
+                            System.out.println("--> " + messageFromServer.getRecipient() + ": " + messageFromServer.getMessage());
+                        }
+                        if(messageFromServer.getType().equals("Exit")){
+                            System.out.println(messageFromServer.getMessage());
+                            break;
+                        }
+                    }
+                }).start();
+
+                while (true) {
+                    String string = console.nextLine();
+                    String firstWord = string.split(" ")[0];
+                    char firstChar = firstWord.charAt(0);
+                    if (firstChar == '@') {
+                        Message request = new Message();
+                        int spaceIndex = string.indexOf(" ");
+                        String remainingStr = string.substring(spaceIndex + 1);
+                        request.setType("Message");
+                        request.setMessage(remainingStr);
+                        request.setRecipient(firstWord.substring(1));
+                        String sendMsgRequest = objectMapper.writeValueAsString(request);
+                        write.println(sendMsgRequest);
+                    } else if(firstWord.equals("exit")){
+                        Message request = new Message();
+                        request.setType("Exit");
+                        String sendMsgRequest = objectMapper.writeValueAsString(request);
+                        write.println(sendMsgRequest);
+                        flag.set(false);
+                        break;
+                    } else {
+                        Message request = new Message();
+                        request.setType("MessageAll");
+                        request.setMessage(string);
+                        request.setRecipient("all");
+                        String sendMsgRequest = objectMapper.writeValueAsString(request);
+                        write.println(sendMsgRequest);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            System.err.println("Ошибка во время подключения к серверу: " + e.getMessage());
+        }
+        System.out.println("Вы отключились от сервера");
     }
 
-    System.out.println("Отключились от сервера");
-  }
-
-  private static String createLoginRequest(String login) {
-    LoginRequest loginRequest = new LoginRequest();
-    loginRequest.setLogin(login);
-
-    try {
-      return objectMapper.writeValueAsString(loginRequest);
-    } catch (JsonProcessingException e) {
-      throw new RuntimeException("Ошибка JSON: " + e.getMessage());
+    private static Message messageToClass(String text) {
+        Message message = null;
+        try {
+            message = objectMapper.reader().readValue(text, Message.class);
+            return message;
+        } catch (IOException e) {
+            System.err.println("Ошибка чтения JSON: " + e.getMessage());
+            return message;
+        }
     }
-  }
 
-  private static boolean checkLoginResponse(String loginResponse) {
-    try {
-      LoginResponse resp = objectMapper.reader().readValue(loginResponse, LoginResponse.class);
-      return resp.isConnected();
-    } catch (IOException e) {
-      System.err.println("Ошибка чтения JSON: " + e.getMessage());
-      return false;
+    public static String sendMessage(String type, String text, String login) {
+        Message message = new Message();
+        message.setType(type);
+        message.setMessage(text);
+        message.setRecipient(login);
+        try {
+            return objectMapper.writeValueAsString(message);
+        } catch (JsonProcessingException e) {
+            return null;
+        }
     }
-  }
-
-  private static void sleep() {
-    try {
-      Thread.sleep(5000);
-    } catch (InterruptedException e) {
-      throw new RuntimeException(e);
-    }
-  }
-
-//  private static class ServerListener implements Runnable {
-//    private final Scanner in;
-//    private final Map<String, List<Consumer<String>>> subscribers = new ConcurrentHashMap<>();
-//
-//    public ServerListener(Scanner in) {
-//      this.in = in;
-//    }
-//
-//    public void subscribe(String type, Consumer<String> consumer) {
-//      List<Consumer<String>> consumers = subscribers.getOrDefault(type, new ArrayList<>());
-//      consumers.add(consumer);
-//      subscribers.put(type, consumers);
-//    }
-//
-//    @Override
-//    public void run() {
-//      while (true) {
-//        String msgFromServer = in.nextLine();
-//
-//        // TODO: парсим сообщение в AbstractRequest
-//        //  по полю type понимаем, что это за request, и обрабатываем его нужным образом
-//        String type = null;
-//
-//        subscribers.getOrDefault(type, List.of()).forEach(it -> {
-//          it.accept(msgFromServer);
-//        });
-//        subscribers.remove(type);
-//
-//        System.out.println("Сообщение от сервера: " + msgFromServer);
-//      }
-//    }
-//  }
-
 }
