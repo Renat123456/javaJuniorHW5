@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 
+import java.io.EOFException;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.io.PrintWriter;
@@ -14,6 +15,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Map;
+import java.util.NoSuchElementException;
 import java.util.Scanner;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -116,98 +118,103 @@ public class ChatServer {
 
         @Override
         public void run() {
-            while (true) {
-                String messageFromClient = read.nextLine();
-                Message message = getMessage(messageFromClient);
+            try {
+                while (true) {
+                    String messageFromClient = read.nextLine();
+                    Message message = getMessage(messageFromClient);
 
-                if (message.getType().equals("RegLogin")) {
-                    char firstChar = message.getMessage().charAt(0);
-                    if (logins.containsKey(message.getMessage())) {
-                        sendMessage("Error", "Логин уже существует", null);
-                    } else if (message.getMessage().length() < 3 || message.getMessage().length() > 16 || message.getMessage().contains(" ") || firstChar == '@' || message.getMessage().isBlank()) {
-                        sendMessage("Error", "Неверный формат логина", null);
-                    } else {
-                        logins.put(message.getMessage(), "");
-                        clientLogin = message.getMessage();
-                        sendMessage("OK", "Логин установлен", null);
-                    }
-                } else if (message.getType().equals("RegPass")) {
-                    if (message.getMessage().isBlank() || message.getMessage().contains(" ")) {
-                        sendMessage("Error", "Неверный формат пароля", null);
-                    } else {
-                        logins.put(clientLogin, message.getMessage());
-                        try (FileWriter writer = new FileWriter("login.txt")) {
-                            for (Map.Entry<String, String> entry : logins.entrySet()) {
-                                writer.write(entry.getKey() + " " + entry.getValue() + "\n");
-                            }
-                            System.out.println("Файл с логинами успешно перезаписан");
-                        } catch (IOException e) {
-                            System.err.println("Ошибка записи в файл: " + e.getMessage());
+                    if (message.getType().equals("RegLogin")) {
+                        char firstChar = message.getMessage().charAt(0);
+                        if (logins.containsKey(message.getMessage())) {
+                            sendMessage("Error", "Логин уже существует", null);
+                        } else if (message.getMessage().length() < 3 || message.getMessage().length() > 16 || message.getMessage().contains(" ") || firstChar == '@' || message.getMessage().isBlank()) {
+                            sendMessage("Error", "Неверный формат логина", null);
+                        } else {
+                            logins.put(message.getMessage(), "");
+                            clientLogin = message.getMessage();
+                            sendMessage("OK", "Логин установлен", null);
                         }
-                        sendMessage("OK", "Логин установлен", null);
-                        break;
-                    }
-                } else if (message.getType().equals("Auth")) {
-                    String[] words = message.getMessage().split(" ");
-                    if(words.length < 2) {
-                        sendMessage("Error", "Неверная пара логин - пароль", null);
-                    } else if (clients.containsKey(words[0])) {
-                        sendMessage("Error", "Пользователь с таким логином уже в чате", null);
-                    } else if (!words[1].equals(logins.get(words[0]))) {
-                        sendMessage("Error", "Неверная пара логин - пароль", null);
-                    } else {
-                        clientLogin = words[0];
-                        sendMessage("OK", "Вы успешно подключены к чату", null);
-                        break;
+                    } else if (message.getType().equals("RegPass")) {
+                        if (message.getMessage().isBlank() || message.getMessage().contains(" ")) {
+                            sendMessage("Error", "Неверный формат пароля", null);
+                        } else {
+                            logins.put(clientLogin, message.getMessage());
+                            try (FileWriter writer = new FileWriter("login.txt")) {
+                                for (Map.Entry<String, String> entry : logins.entrySet()) {
+                                    writer.write(entry.getKey() + " " + entry.getValue() + "\n");
+                                }
+                                System.out.println("Файл с логинами успешно перезаписан");
+                            } catch (IOException e) {
+                                System.err.println("Ошибка записи в файл: " + e.getMessage());
+                            }
+                            sendMessage("OK", "Логин установлен", null);
+                            break;
+                        }
+                    } else if (message.getType().equals("Auth")) {
+                        String[] words = message.getMessage().split(" ");
+                        if (words.length < 2) {
+                            sendMessage("Error", "Неверная пара логин - пароль", null);
+                        } else if (clients.containsKey(words[0])) {
+                            sendMessage("Error", "Пользователь с таким логином уже в чате", null);
+                        } else if (!words[1].equals(logins.get(words[0]))) {
+                            sendMessage("Error", "Неверная пара логин - пароль", null);
+                        } else {
+                            clientLogin = words[0];
+                            sendMessage("OK", "Вы успешно подключены к чату", null);
+                            break;
+                        }
                     }
                 }
-            }
-            clients.put(clientLogin, this);
-            System.out.println("Новый пользователь зарегистрирован под логином " + clientLogin);
-            System.out.println("Всего подключенных пользователей " + clients.size());
+                clients.put(clientLogin, this);
+                System.out.println("Новый пользователь зарегистрирован под логином " + clientLogin);
+                System.out.println("Всего подключенных пользователей " + clients.size());
 
-            while (true) {
-                String messageFromClient = read.nextLine();
-                final String type;
-                final Message message;
-                try {
-                    message = objectMapper.reader().readValue(messageFromClient, Message.class);
-                    type = message.getType();
-                } catch (IOException e) {
-                    System.err.println("Не удалось прочитать сообщение от клиента [" + clientLogin + "]: " + e.getMessage());
-                    sendMessage("Error", "Не удалось прочитать сообщение: " + e.getMessage(), clientLogin);
-                    continue;
-                }
-
-                if (type.equals("Message")) {
-                    ClientHandler clientTo = clients.get(message.getRecipient());
-                    if (clientTo == null) {
-                        sendMessage("Error", "Клиент с логином [" + message.getRecipient() + "] не найден", clientLogin);
+                while (true) {
+                    String messageFromClient = read.nextLine();
+                    final String type;
+                    final Message message;
+                    try {
+                        message = objectMapper.reader().readValue(messageFromClient, Message.class);
+                        type = message.getType();
+                    } catch (IOException e) {
+                        System.err.println("Не удалось прочитать сообщение от клиента [" + clientLogin + "]: " + e.getMessage());
+                        sendMessage("Error", "Не удалось прочитать сообщение: " + e.getMessage(), clientLogin);
                         continue;
                     }
-                    clientTo.sendMessage("Message", message.getMessage(), clientLogin);
-                } else if (type.equals("MessageAll")) {
-                    for (Map.Entry<String, ClientHandler> client : clients.entrySet()) {
-                        ClientHandler clientI = client.getValue();
-                        if (clientI.clientLogin != null && clientI.clientLogin != clientLogin) {
-                            clientI.sendMessage("MessageAll", message.getMessage(), clientLogin);
+
+                    if (type.equals("Message")) {
+                        ClientHandler clientTo = clients.get(message.getRecipient());
+                        if (clientTo == null) {
+                            sendMessage("Error", "Клиент с логином [" + message.getRecipient() + "] не найден", clientLogin);
+                            continue;
                         }
-                    }
-                } else if (type.equals("Exit")) {
-                    sendMessage("Exit", "Вы вышли из чата", clientLogin);
-                    for (Map.Entry<String, ClientHandler> client : clients.entrySet()) {
-                        ClientHandler clientI = client.getValue();
-                        if (clientI.clientLogin != null && clientI.clientLogin != clientLogin) {
-                            clientI.sendMessage("Exit", "Клиент с логином " + clientLogin + " вышел из чата", clientLogin);
+                        clientTo.sendMessage("Message", message.getMessage(), clientLogin);
+                    } else if (type.equals("MessageAll")) {
+                        for (Map.Entry<String, ClientHandler> client : clients.entrySet()) {
+                            ClientHandler clientI = client.getValue();
+                            if (clientI.clientLogin != null && clientI.clientLogin != clientLogin) {
+                                clientI.sendMessage("MessageAll", message.getMessage(), clientLogin);
+                            }
                         }
+                    } else if (type.equals("Exit")) {
+                        sendMessage("Exit", "Вы вышли из чата", clientLogin);
+                        for (Map.Entry<String, ClientHandler> client : clients.entrySet()) {
+                            ClientHandler clientI = client.getValue();
+                            if (clientI.clientLogin != null && clientI.clientLogin != clientLogin) {
+                                clientI.sendMessage("Exit", "Клиент с логином " + clientLogin + " вышел из чата", clientLogin);
+                            }
+                        }
+                        System.out.println("Клиент с логином " + clientLogin + " вышел из чата");
+                        break;
+                    } else {
+                        break;
                     }
-                    System.out.println("Клиент с логином " + clientLogin + " вышел из чата");
-                    break;
-                } else {
-                    break;
                 }
+            } catch (NoSuchElementException e) {
+                System.out.println("Соединение с клиентом [" + clientLogin + "] было разорвано.");
+            } finally {
+                doClose();
             }
-            doClose();
         }
 
         private void doClose() {
@@ -215,7 +222,9 @@ public class ChatServer {
                 read.close();
                 write.close();
                 client.close();
-                clients.remove(clientLogin);
+                if (clientLogin != null){
+                    clients.remove(clientLogin);
+                }
             } catch (IOException e) {
                 System.err.println("Ошибка во время отключения клиента: " + e.getMessage());
             }
